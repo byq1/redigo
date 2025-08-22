@@ -15,6 +15,7 @@
 package redis
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -111,7 +112,7 @@ func convertAssignString(d reflect.Value, s string) (err error) {
 	return
 }
 
-func convertAssignBulkString(d reflect.Value, s []byte) (err error) {
+func convertAssignBulkString(d reflect.Value, s []byte, autoJson bool) (err error) {
 	switch d.Type().Kind() {
 	case reflect.Slice:
 		// Handle []byte destination here to avoid unnecessary
@@ -138,6 +139,11 @@ func convertAssignBulkString(d reflect.Value, s []byte) (err error) {
 
 			if sc, ok := d.Interface().(Scanner); ok {
 				return sc.RedisScan(s)
+			}
+			if autoJson {
+				if len(s) > 0 {
+					return json.Unmarshal(s, d.Interface())
+				}
 			}
 		}
 		err = convertAssignString(d, string(s))
@@ -174,13 +180,18 @@ func convertAssignInt(d reflect.Value, s int64) (err error) {
 	return
 }
 
-func convertAssignValue(d reflect.Value, s interface{}) (err error) {
+func convertAssignValue(d reflect.Value, s interface{}, autoJson bool) (err error) {
 	if d.Kind() != reflect.Ptr {
 		if d.CanAddr() {
 			d2 := d.Addr()
 			if d2.CanInterface() {
 				if scanner, ok := d2.Interface().(Scanner); ok {
 					return scanner.RedisScan(s)
+				}
+				if autoJson {
+					if bs, ok := s.([]byte); ok && len(bs) > 0 {
+						return json.Unmarshal(bs, d2.Interface())
+					}
 				}
 			}
 		}
@@ -192,13 +203,18 @@ func convertAssignValue(d reflect.Value, s interface{}) (err error) {
 		if scanner, ok := d.Interface().(Scanner); ok {
 			return scanner.RedisScan(s)
 		}
+		if autoJson {
+			if bs, ok := s.([]byte); ok && len(bs) > 0 {
+				return json.Unmarshal(bs, d.Interface())
+			}
+		}
 	}
 
 	switch s := s.(type) {
 	case nil:
 		err = convertAssignNil(d)
 	case []byte:
-		err = convertAssignBulkString(d, s)
+		err = convertAssignBulkString(d, s, autoJson)
 	case int64:
 		err = convertAssignInt(d, s)
 	case string:
@@ -217,7 +233,7 @@ func convertAssignArray(d reflect.Value, s []interface{}) error {
 	}
 	ensureLen(d, len(s))
 	for i := 0; i < len(s); i++ {
-		if err := convertAssignValue(d.Index(i), s[i]); err != nil {
+		if err := convertAssignValue(d.Index(i), s[i], false); err != nil {
 			return err
 		}
 	}
@@ -252,7 +268,7 @@ func convertAssign(d interface{}, s interface{}) (err error) {
 			if d := reflect.ValueOf(d); d.Type().Kind() != reflect.Ptr {
 				err = cannotConvert(d, s)
 			} else {
-				err = convertAssignBulkString(d.Elem(), s)
+				err = convertAssignBulkString(d.Elem(), s, false)
 			}
 		}
 	case int64:
@@ -344,6 +360,7 @@ type fieldSpec struct {
 	name      string
 	index     []int
 	omitEmpty bool
+	autoJson  bool
 }
 
 type structSpec struct {
@@ -404,6 +421,8 @@ LOOP:
 					switch p {
 					case "omitempty":
 						fs.omitEmpty = true
+					case "json":
+						fs.autoJson = true
 					default:
 						panic(fmt.Errorf("redigo: unknown field tag %s for type %s", p, t.Name()))
 					}
@@ -477,7 +496,7 @@ var errScanStructValue = errors.New("redigo.ScanStruct: value must be non-nil po
 // ScanStruct uses exported field names to match values in the response. Use
 // 'redis' field tag to override the name:
 //
-//      Field int `redis:"myName"`
+//	Field int `redis:"myName"`
 //
 // Fields with the tag redis:"-" are ignored.
 //
@@ -523,7 +542,7 @@ func ScanStruct(src []interface{}, dest interface{}) error {
 			continue
 		}
 
-		if err := convertAssignValue(fieldByIndexCreate(d, fs.index), s); err != nil {
+		if err := convertAssignValue(fieldByIndexCreate(d, fs.index), s, fs.autoJson); err != nil {
 			return fmt.Errorf("redigo.ScanStruct: cannot assign field %s: %v", fs.name, err)
 		}
 	}
@@ -568,7 +587,7 @@ func ScanSlice(src []interface{}, dest interface{}, fieldNames ...string) error 
 			if s == nil {
 				continue
 			}
-			if err := convertAssignValue(d.Index(i), s); err != nil {
+			if err := convertAssignValue(d.Index(i), s, false); err != nil {
 				return fmt.Errorf("redigo.ScanSlice: cannot assign element %d: %v", i, err)
 			}
 		}
@@ -614,7 +633,7 @@ func ScanSlice(src []interface{}, dest interface{}, fieldNames ...string) error 
 			if s == nil {
 				continue
 			}
-			if err := convertAssignValue(d.FieldByIndex(fs.index), s); err != nil {
+			if err := convertAssignValue(d.FieldByIndex(fs.index), s, false); err != nil {
 				return fmt.Errorf("redigo.ScanSlice: cannot assign element %d to field %s: %v", i*len(fss)+j, fs.name, err)
 			}
 		}
@@ -702,14 +721,25 @@ func flattenStruct(args Args, v reflect.Value) Args {
 				continue
 			}
 		}
+
 		if arg, ok := fv.Interface().(Argument); ok {
 			args = append(args, fs.name, arg.RedisArg())
 		} else if fv.Kind() == reflect.Ptr {
 			if !fv.IsNil() {
-				args = append(args, fs.name, fv.Elem().Interface())
+				if fs.autoJson {
+					val, _ := json.Marshal(fv.Interface())
+					args = append(args, fs.name, val)
+				} else {
+					args = append(args, fs.name, fv.Elem().Interface())
+				}
 			}
 		} else {
-			args = append(args, fs.name, fv.Interface())
+			if fs.autoJson {
+				val, _ := json.Marshal(fv.Interface())
+				args = append(args, fs.name, val)
+			} else {
+				args = append(args, fs.name, fv.Interface())
+			}
 		}
 	}
 	return args

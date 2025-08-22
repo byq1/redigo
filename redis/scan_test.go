@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gomodule/redigo/redis"
+	"github.com/byq1/redigo/redis"
 	"github.com/stretchr/testify/require"
 )
 
@@ -785,14 +785,18 @@ func ExampleArgs() {
 	defer c.Close()
 
 	var p1, p2 struct {
-		Title  string `redis:"title"`
-		Author string `redis:"author"`
-		Body   string `redis:"body"`
+		Title  string            `redis:"title"`
+		Author string            `redis:"author"`
+		Body   string            `redis:"body"`
+		Dict   map[string]string `redis:"dict"`
+		Array  []string          `redis:"array"`
 	}
 
 	p1.Title = "Example"
 	p1.Author = "Gary"
 	p1.Body = "Hello"
+	p1.Dict = map[string]string{"key1": "value1", "key2": "value2"}
+	p1.Array = []string{"a", "b", "c"}
 
 	if _, err := c.Do("HMSET", redis.Args{}.Add("id1").AddFlat(&p1)...); err != nil {
 		fmt.Println(err)

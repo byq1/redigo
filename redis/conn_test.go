@@ -23,14 +23,14 @@ import (
 	"io"
 	"math"
 	"net"
-	"sync"
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/gomodule/redigo/redis"
+	"github.com/byq1/redigo/redis"
 	"github.com/stretchr/testify/require"
 )
 

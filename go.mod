@@ -1,4 +1,4 @@
-module github.com/gomodule/redigo
+module github.com/byq1/redigo
 
 go 1.17
 

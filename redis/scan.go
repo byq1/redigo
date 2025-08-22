@@ -727,7 +727,10 @@ func flattenStruct(args Args, v reflect.Value) Args {
 		} else if fv.Kind() == reflect.Ptr {
 			if !fv.IsNil() {
 				if fs.autoJson {
-					val, _ := json.Marshal(fv.Interface())
+					val, err := json.Marshal(fv.Interface())
+					if err != nil {
+						continue
+					}
 					args = append(args, fs.name, val)
 				} else {
 					args = append(args, fs.name, fv.Elem().Interface())
@@ -735,7 +738,10 @@ func flattenStruct(args Args, v reflect.Value) Args {
 			}
 		} else {
 			if fs.autoJson {
-				val, _ := json.Marshal(fv.Interface())
+				val, err := json.Marshal(fv.Interface())
+				if err != nil {
+					continue
+				}
 				args = append(args, fs.name, val)
 			} else {
 				args = append(args, fs.name, fv.Interface())

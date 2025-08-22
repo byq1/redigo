@@ -19,8 +19,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/byq1/redigo/redis"
 	"github.com/byq1/redigo/redisx"
-	"github.com/byq1igo/redis"
 	"github.com/stretchr/testify/require"
 )
 

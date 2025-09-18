@@ -78,6 +78,7 @@ func convertAssignError(d reflect.Value, s Error) (err error) {
 	return
 }
 
+// 实现字符串到各种类型的转换
 func convertAssignString(d reflect.Value, s string) (err error) {
 	switch d.Type().Kind() {
 	case reflect.Float32, reflect.Float64:
@@ -101,10 +102,57 @@ func convertAssignString(d reflect.Value, s string) (err error) {
 	case reflect.Slice:
 		if d.Type().Elem().Kind() == reflect.Uint8 {
 			d.SetBytes([]byte(s))
-		} else {
-			err = cannotConvert(d, s)
+			break
 		}
+
+		err = assignJSON(d, []byte(s))
+
+		// // 当目标类型是切片、数组或结构体时，使用 json.Unmarshal 转换数据
+		// if d.CanAddr() {
+		// 	// 如果可以取地址，则直接使用地址进行反序列化
+		// 	err = json.Unmarshal([]byte(s), d.Addr().Interface())
+		// 	if err != nil {
+		// 		err = cannotConvert(d, s)
+		// 	}
+		// } else {
+		// 	// 如果不能取地址，则创建一个新实例进行反序列化，然后赋值
+		// 	newValue := reflect.New(d.Type())
+		// 	err = json.Unmarshal([]byte(s), newValue.Interface())
+		// 	if err != nil {
+		// 		err = cannotConvert(d, s)
+		// 	} else {
+		// 		d.Set(newValue.Elem())
+		// 	}
+		// }
+	case reflect.Array, reflect.Struct, reflect.Map:
+		err = assignJSON(d, []byte(s))
+
+		// // 当目标类型是切片、数组或结构体时，使用 json.Unmarshal 转换数据
+		// if d.CanAddr() {
+		// 	// 如果可以取地址，则直接使用地址进行反序列化
+		// 	err = json.Unmarshal([]byte(s), d.Addr().Interface())
+		// 	if err != nil {
+		// 		err = cannotConvert(d, s)
+		// 	}
+		// } else {
+		// 	// 如果不能取地址，则创建一个新实例进行反序列化，然后赋值
+		// 	newValue := reflect.New(d.Type())
+		// 	err = json.Unmarshal([]byte(s), newValue.Interface())
+		// 	if err != nil {
+		// 		err = cannotConvert(d, s)
+		// 	} else {
+		// 		d.Set(newValue.Elem())
+		// 	}
+		// }
+	case reflect.Interface:
+		// 对于 interface{} 类型，直接设置字符串值
+		d.Set(reflect.ValueOf(s))
 	case reflect.Ptr:
+		if d.IsNil() {
+			// 如果指针是 nil，需要先创建一个新对象
+			d.Set(reflect.New(d.Type().Elem()))
+		}
+		// 递归处理指针指向的元素
 		err = convertAssignString(d.Elem(), s)
 	default:
 		err = cannotConvert(d, s)
@@ -112,7 +160,8 @@ func convertAssignString(d reflect.Value, s string) (err error) {
 	return
 }
 
-func convertAssignBulkString(d reflect.Value, s []byte, autoJson bool) (err error) {
+// 用字节对一个可赋值对象赋值，字节对应一个对象
+func convertAssignBulkString(d reflect.Value, s []byte) (err error) {
 	switch d.Type().Kind() {
 	case reflect.Slice:
 		// Handle []byte destination here to avoid unnecessary
@@ -120,7 +169,14 @@ func convertAssignBulkString(d reflect.Value, s []byte, autoJson bool) (err erro
 		if d.Type().Elem().Kind() == reflect.Uint8 {
 			d.SetBytes(s)
 		} else {
-			err = cannotConvert(d, s)
+			err = assignJSON(d, s)
+			// // err = cannotConvert(d, s)
+			// newValue := reflect.New(d.Type())
+			// err = json.Unmarshal(s, newValue.Interface())
+			// if err != nil {
+			// 	err = cannotConvert(d, s)
+			// }
+			// d.Set(newValue.Elem())
 		}
 	case reflect.Ptr:
 		if d.CanInterface() && d.CanSet() {
@@ -140,11 +196,6 @@ func convertAssignBulkString(d reflect.Value, s []byte, autoJson bool) (err erro
 			if sc, ok := d.Interface().(Scanner); ok {
 				return sc.RedisScan(s)
 			}
-			if autoJson {
-				if len(s) > 0 {
-					return json.Unmarshal(s, d.Interface())
-				}
-			}
 		}
 		err = convertAssignString(d, string(s))
 	default:
@@ -153,6 +204,26 @@ func convertAssignBulkString(d reflect.Value, s []byte, autoJson bool) (err erro
 	return err
 }
 
+// 通用的 JSON 反序列化处理函数
+func assignJSON(d reflect.Value, data []byte) error {
+	if d.CanAddr() {
+		err := json.Unmarshal(data, d.Addr().Interface())
+		if err != nil {
+			return cannotConvert(d, string(data))
+		}
+		return nil
+	} else {
+		newValue := reflect.New(d.Type())
+		err := json.Unmarshal(data, newValue.Interface())
+		if err != nil {
+			return cannotConvert(d, string(data))
+		}
+		d.Set(newValue.Elem())
+		return nil
+	}
+}
+
+// 用int64对一个可赋值对象赋值
 func convertAssignInt(d reflect.Value, s int64) (err error) {
 	switch d.Type().Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -180,18 +251,14 @@ func convertAssignInt(d reflect.Value, s int64) (err error) {
 	return
 }
 
-func convertAssignValue(d reflect.Value, s interface{}, autoJson bool) (err error) {
+// 对可赋值对象赋值
+func convertAssignValue(d reflect.Value, s interface{}) (err error) {
 	if d.Kind() != reflect.Ptr {
 		if d.CanAddr() {
 			d2 := d.Addr()
 			if d2.CanInterface() {
 				if scanner, ok := d2.Interface().(Scanner); ok {
 					return scanner.RedisScan(s)
-				}
-				if autoJson {
-					if bs, ok := s.([]byte); ok && len(bs) > 0 {
-						return json.Unmarshal(bs, d2.Interface())
-					}
 				}
 			}
 		}
@@ -203,18 +270,13 @@ func convertAssignValue(d reflect.Value, s interface{}, autoJson bool) (err erro
 		if scanner, ok := d.Interface().(Scanner); ok {
 			return scanner.RedisScan(s)
 		}
-		if autoJson {
-			if bs, ok := s.([]byte); ok && len(bs) > 0 {
-				return json.Unmarshal(bs, d.Interface())
-			}
-		}
 	}
 
 	switch s := s.(type) {
 	case nil:
 		err = convertAssignNil(d)
 	case []byte:
-		err = convertAssignBulkString(d, s, autoJson)
+		err = convertAssignBulkString(d, s)
 	case int64:
 		err = convertAssignInt(d, s)
 	case string:
@@ -227,19 +289,22 @@ func convertAssignValue(d reflect.Value, s interface{}, autoJson bool) (err erro
 	return err
 }
 
+// 用切片给一个可赋值对象赋值
 func convertAssignArray(d reflect.Value, s []interface{}) error {
 	if d.Type().Kind() != reflect.Slice {
 		return cannotConvert(d, s)
 	}
 	ensureLen(d, len(s))
 	for i := 0; i < len(s); i++ {
-		if err := convertAssignValue(d.Index(i), s[i], false); err != nil {
+		if err := convertAssignValue(d.Index(i), s[i]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// 对应位置转换赋值
+// d必须是有效指针
 func convertAssign(d interface{}, s interface{}) (err error) {
 	if scanner, ok := d.(Scanner); ok {
 		return scanner.RedisScan(s)
@@ -268,7 +333,7 @@ func convertAssign(d interface{}, s interface{}) (err error) {
 			if d := reflect.ValueOf(d); d.Type().Kind() != reflect.Ptr {
 				err = cannotConvert(d, s)
 			} else {
-				err = convertAssignBulkString(d.Elem(), s, false)
+				err = convertAssignBulkString(d.Elem(), s)
 			}
 		}
 	case int64:
@@ -341,6 +406,7 @@ func convertAssign(d interface{}, s interface{}) (err error) {
 //
 // To enable easy use of Scan in a loop, Scan returns the slice of src
 // following the copied values.
+// src切片中的值依次赋值给dest列表中
 func Scan(src []interface{}, dest ...interface{}) ([]interface{}, error) {
 	if len(src) < len(dest) {
 		return nil, errors.New("redigo.Scan: array short")
@@ -360,7 +426,7 @@ type fieldSpec struct {
 	name      string
 	index     []int
 	omitEmpty bool
-	autoJson  bool
+	// autoJson  bool
 }
 
 type structSpec struct {
@@ -422,7 +488,7 @@ LOOP:
 					case "omitempty":
 						fs.omitEmpty = true
 					case "json":
-						fs.autoJson = true
+					// 	fs.autoJson = true
 					default:
 						panic(fmt.Errorf("redigo: unknown field tag %s for type %s", p, t.Name()))
 					}
@@ -542,7 +608,7 @@ func ScanStruct(src []interface{}, dest interface{}) error {
 			continue
 		}
 
-		if err := convertAssignValue(fieldByIndexCreate(d, fs.index), s, fs.autoJson); err != nil {
+		if err := convertAssignValue(fieldByIndexCreate(d, fs.index), s); err != nil {
 			return fmt.Errorf("redigo.ScanStruct: cannot assign field %s: %v", fs.name, err)
 		}
 	}
@@ -564,15 +630,19 @@ var (
 // Struct fields must be integer, float, boolean or string values. All struct
 // fields are used unless a subset is specified using fieldNames.
 func ScanSlice(src []interface{}, dest interface{}, fieldNames ...string) error {
+	// 检查 dest 是否为指向切片的指针
 	d := reflect.ValueOf(dest)
 	if d.Kind() != reflect.Ptr || d.IsNil() {
 		return errScanSliceValue
 	}
+	// 获取切片的实际 reflect.Value
 	d = d.Elem()
 	if d.Kind() != reflect.Slice {
 		return errScanSliceValue
 	}
 
+	// 确定切片元素的类型 t
+	// 如果元素是指向结构体的指针，则标记 isPtr = true 并获取实际结构体类型
 	isPtr := false
 	t := d.Type().Elem()
 	st := t
@@ -581,24 +651,29 @@ func ScanSlice(src []interface{}, dest interface{}, fieldNames ...string) error 
 		t = t.Elem()
 	}
 
+	// 如果元素不是结构体或者实现了 Scanner 接口，直接使用 convertAssignValue 进行一对一转换
 	if t.Kind() != reflect.Struct || st.Implements(scannerType) {
 		ensureLen(d, len(src))
 		for i, s := range src {
 			if s == nil {
 				continue
 			}
-			if err := convertAssignValue(d.Index(i), s, false); err != nil {
+			if err := convertAssignValue(d.Index(i), s); err != nil {
 				return fmt.Errorf("redigo.ScanSlice: cannot assign element %d: %v", i, err)
 			}
 		}
 		return nil
 	}
 
+	// 对结构体类型处理
+
+	// 获取目标结构体的字段信息
 	ss, err := structSpecForType(t)
 	if err != nil {
 		return fmt.Errorf("redigo.ScanSlice: %w", err)
 	}
 
+	// 如果指定了 fieldNames，则只处理指定的字段
 	fss := ss.l
 	if len(fieldNames) > 0 {
 		fss = make([]*fieldSpec, len(fieldNames))
@@ -614,6 +689,7 @@ func ScanSlice(src []interface{}, dest interface{}, fieldNames ...string) error 
 		return errors.New("redigo.ScanSlice: no struct fields")
 	}
 
+	// n个结构体
 	n := len(src) / len(fss)
 	if n*len(fss) != len(src) {
 		return errors.New("redigo.ScanSlice: length not a multiple of struct field count")
@@ -621,6 +697,7 @@ func ScanSlice(src []interface{}, dest interface{}, fieldNames ...string) error 
 
 	ensureLen(d, n)
 	for i := 0; i < n; i++ {
+		// 如果是结构体指针且为 nil，则创建新实例
 		d := d.Index(i)
 		if isPtr {
 			if d.IsNil() {
@@ -628,17 +705,46 @@ func ScanSlice(src []interface{}, dest interface{}, fieldNames ...string) error 
 			}
 			d = d.Elem()
 		}
+		// 按字段顺序从 src 中提取数据并赋值给对应字段
 		for j, fs := range fss {
 			s := src[i*len(fss)+j]
 			if s == nil {
 				continue
 			}
-			if err := convertAssignValue(d.FieldByIndex(fs.index), s, false); err != nil {
+			if err := convertAssignValue(d.FieldByIndex(fs.index), s); err != nil {
 				return fmt.Errorf("redigo.ScanSlice: cannot assign element %d to field %s: %v", i*len(fss)+j, fs.name, err)
 			}
 		}
 	}
 	return nil
+}
+
+func TestScanSlice() {
+	// src转换为切片
+	//
+	type Person struct {
+		Name string `redis:"name"`
+		Age  int    `redis:"age"`
+	}
+
+	// Redis 返回的数据
+
+	// src := []interface{}{
+	// 	[]byte("name"), []byte("Alice"), // 第一个人的 name 字段
+	// 	[]byte("age"), []byte("25"), // 第一个人的 age 字段
+	// 	[]byte("name"), []byte("Bob"), // 第二个人的 name 字段
+	// 	[]byte("age"), []byte("30"), // 第二个人的 age 字段
+	// }
+	src := []interface{}{
+		[]byte("Alice"), // 第一个人的 name 字段
+		[]byte("25"),    // 第一个人的 age 字段
+		[]byte("Bob"),   // 第二个人的 name 字段
+		[]byte("30"),    // 第二个人的 age 字段
+	}
+
+	var people []*Person
+	err := ScanSlice(src, &people, "name", "age")
+	fmt.Println(people, err)
 }
 
 // Args is a helper for constructing command arguments from structured values.
@@ -669,11 +775,23 @@ func (args Args) AddFlat(v interface{}) Args {
 		args = flattenStruct(args, rv)
 	case reflect.Slice:
 		for i := 0; i < rv.Len(); i++ {
-			args = append(args, rv.Index(i).Interface())
+			if value, ok := MarshalFieldValue(rv.Index(i)); ok {
+				args = append(args, value)
+			}
+			// args = append(args, rv.Index(i).Interface())
 		}
 	case reflect.Map:
 		for _, k := range rv.MapKeys() {
-			args = append(args, k.Interface(), rv.MapIndex(k).Interface())
+			// 对映射的键使用 MarshalFieldValue 处理
+			// key, keyOk := MarshalFieldValue(k)
+			key := k.Interface()
+			// 对映射的值使用 MarshalFieldValue 处理
+			val, valOk := MarshalFieldValue(rv.MapIndex(k))
+
+			if valOk {
+				args = append(args, key, val)
+			}
+			// args = append(args, k.Interface(), rv.MapIndex(k).Interface())
 		}
 	case reflect.Ptr:
 		if rv.Type().Elem().Kind() == reflect.Struct {
@@ -722,31 +840,56 @@ func flattenStruct(args Args, v reflect.Value) Args {
 			}
 		}
 
-		if arg, ok := fv.Interface().(Argument); ok {
-			args = append(args, fs.name, arg.RedisArg())
-		} else if fv.Kind() == reflect.Ptr {
-			if !fv.IsNil() {
-				if fs.autoJson {
-					val, err := json.Marshal(fv.Interface())
-					if err != nil {
-						continue
-					}
-					args = append(args, fs.name, val)
-				} else {
-					args = append(args, fs.name, fv.Elem().Interface())
-				}
-			}
-		} else {
-			if fs.autoJson {
-				val, err := json.Marshal(fv.Interface())
-				if err != nil {
-					continue
-				}
-				args = append(args, fs.name, val)
-			} else {
-				args = append(args, fs.name, fv.Interface())
-			}
+		// 使用新的处理函数处理字段值
+		if value, ok := MarshalFieldValue(fv); ok {
+			args = append(args, fs.name, value)
 		}
 	}
 	return args
+}
+
+// MarshalFieldValue 处理单个结构体字段的值，决定如何将其添加到 args 中 , fs *fieldSpec
+func MarshalFieldValue(fv reflect.Value) (interface{}, bool) {
+	// 检查字段是否实现了 Argument 接口
+	if arg, ok := fv.Interface().(Argument); ok {
+		return arg.RedisArg(), true
+	}
+
+	// 根据字段类型决定处理方式
+	switch fv.Kind() {
+	case reflect.Struct, reflect.Array:
+		// 对于结构体和数组类型，进行 JSON 序列化
+		val, err := json.Marshal(fv.Interface())
+		if err != nil {
+			return nil, false
+		}
+		return val, true
+	case reflect.Map, reflect.Slice:
+		// 对于 map 和 slice 类型，进行 JSON 序列化
+		val, err := json.Marshal(fv.Interface())
+		if err != nil {
+			return nil, false
+		}
+		return val, true
+	case reflect.Ptr:
+		// 指针类型处理
+		if !fv.IsNil() {
+			// 递归处理指针指向的值
+			return MarshalFieldValue(fv.Elem())
+		}
+		// 空指针
+		return nil, false
+	case reflect.Interface:
+		// 接口类型处理
+		if fv.IsNil() {
+			// 空接口
+			return nil, false
+		}
+		// 获取接口中存储的具体值并递归处理
+		elem := fv.Elem()
+		return MarshalFieldValue(elem)
+	default:
+		// 基本类型直接使用
+		return fv.Interface(), true
+	}
 }

@@ -598,9 +598,9 @@ func ScanStruct(src []interface{}, dest interface{}) error {
 			continue
 		}
 
-		name, ok := src[i].([]byte)
+		name, ok := convertToBulk(src[i])
 		if !ok {
-			return fmt.Errorf("redigo.ScanStruct: key %d not a bulk string value", i)
+			return fmt.Errorf("redigo.ScanStruct: key %d not a bulk string value got type: %T", i, src[i])
 		}
 
 		fs := ss.fieldSpec(name)
@@ -613,6 +613,19 @@ func ScanStruct(src []interface{}, dest interface{}) error {
 		}
 	}
 	return nil
+}
+
+// convertToBulk converts src to a []byte if src is a string or bulk string
+// and returns true. Otherwise nil and false is returned.
+func convertToBulk(src interface{}) ([]byte, bool) {
+	switch v := src.(type) {
+	case []byte:
+		return v, true
+	case string:
+		return []byte(v), true
+	default:
+		return nil, false
+	}
 }
 
 var (

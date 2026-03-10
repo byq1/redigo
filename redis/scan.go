@@ -796,15 +796,13 @@ func (args Args) AddFlat(v interface{}) Args {
 	case reflect.Map:
 		for _, k := range rv.MapKeys() {
 			// 对映射的键使用 MarshalFieldValue 处理
-			// key, keyOk := MarshalFieldValue(k)
-			key := k.Interface()
+			key, keyOk := MarshalFieldValue(k)
 			// 对映射的值使用 MarshalFieldValue 处理
 			val, valOk := MarshalFieldValue(rv.MapIndex(k))
 
-			if valOk {
+			if keyOk && valOk {
 				args = append(args, key, val)
 			}
-			// args = append(args, k.Interface(), rv.MapIndex(k).Interface())
 		}
 	case reflect.Ptr:
 		if rv.Type().Elem().Kind() == reflect.Struct {
@@ -870,6 +868,17 @@ func MarshalFieldValue(fv reflect.Value) (interface{}, bool) {
 
 	// 根据字段类型决定处理方式
 	switch fv.Kind() {
+	case reflect.Slice:
+		// []byte 类型直接使用，不进行 JSON 序列化
+		if fv.Type().Elem().Kind() == reflect.Uint8 {
+			return fv.Interface(), true
+		}
+		// 其他 slice 类型进行 JSON 序列化
+		val, err := json.Marshal(fv.Interface())
+		if err != nil {
+			return nil, false
+		}
+		return val, true
 	case reflect.Struct, reflect.Array:
 		// 对于结构体和数组类型，进行 JSON 序列化
 		val, err := json.Marshal(fv.Interface())
@@ -877,8 +886,8 @@ func MarshalFieldValue(fv reflect.Value) (interface{}, bool) {
 			return nil, false
 		}
 		return val, true
-	case reflect.Map, reflect.Slice:
-		// 对于 map 和 slice 类型，进行 JSON 序列化
+	case reflect.Map:
+		// 对于 map 类型，进行 JSON 序列化
 		val, err := json.Marshal(fv.Interface())
 		if err != nil {
 			return nil, false

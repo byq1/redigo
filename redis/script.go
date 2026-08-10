@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"io"
 	"strings"
 )
@@ -99,6 +100,12 @@ func (s *Script) Send(c Conn, keysAndArgs ...interface{}) error {
 
 // Load loads the script without evaluating it.
 func (s *Script) Load(c Conn) error {
-	_, err := c.Do("SCRIPT", "LOAD", s.src)
-	return err
+	val, err := String(c.Do("SCRIPT", "LOAD", s.src))
+	if err != nil {
+		return err
+	}
+	if val != s.hash {
+		return errors.New("hash error")
+	}
+	return nil
 }
